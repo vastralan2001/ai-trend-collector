@@ -122,33 +122,29 @@ def select_top_items(items: list[TrendItem], total: int = 5, max_per_category: i
 
 
 def format_daily_brief(items: list[TrendItem], date_str: str = "") -> str:
-    """生成 aihot 风格的中文日报 Markdown"""
+    """生成极简中文日报，降低 AI 味：只保留分类 + 标题 + 链接"""
     if not date_str:
         date_str = datetime.utcnow().strftime("%Y-%m-%d")
 
-    lines = [f"**AI 趋势早报 · {date_str}**", ""]
+    lines = [
+        f"**AI 趋势早报 · {date_str}**",
+        "",
+        "早上好，今天 AI 圈这几件事值得看：",
+        "",
+    ]
 
     for idx, item in enumerate(items, 1):
-        source_label = _source_label(item)
-        title_line = f"{idx}. [{item.category}] {item.title} — {source_label}"
-        lines.append(title_line)
-
-        summary = item.summary[:80] + "..." if len(item.summary) > 80 else item.summary
-        if summary:
-            lines.append(summary)
-
+        lines.append(f"{idx}. [{item.category}] {item.title}")
         if item.url:
             lines.append(str(item.url))
         lines.append("")
 
-    lines.append("数据来自 AI Trend Collector · 每天 10:00 生成")
+    lines.append("以上 5 条，完整索引见底部链接。")
     return "\n".join(lines)
 
 
 def _source_label(item: TrendItem) -> str:
     """生成来源标签"""
-    if item.author:
-        return item.author
     source_display = {
         "product_hunt": "Product Hunt",
         "github_trends": "GitHub",

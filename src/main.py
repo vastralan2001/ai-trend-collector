@@ -117,6 +117,40 @@ def build_review_markdown(items: list[TrendItem], title: str = "AI 趋势日报"
 MASTER_DOC_ID_FILE = "data/master_doc_id.txt"
 
 
+def save_preview_file(items: list[TrendItem], top_items: list[TrendItem], date_str: str = "") -> Path:
+    """把完整预览内容写到文件，方便用户查看不被截断的详细信息"""
+    if not date_str:
+        date_str = datetime.utcnow().strftime("%Y-%m-%d")
+
+    log_dir = Path("logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    path = log_dir / f"preview_{date_str}.md"
+
+    lines = [f"# AI 趋势日报完整预览 · {date_str}", ""]
+    lines.append(f"共抓取 {len(items)} 条，精选 {len(top_items)} 条。\n")
+
+    lines.append("## 精选条目（将推送到群）\n")
+    for idx, item in enumerate(top_items, 1):
+        lines.append(f"### {idx}. [{item.category}] {item.title}")
+        if item.author:
+            lines.append(f"来源：{item.author}")
+        if item.summary:
+            lines.append(item.summary)
+        if item.url:
+            lines.append(f"链接：{item.url}")
+        if item.tags:
+            lines.append(f"标签：{', '.join(item.tags)}")
+        lines.append(f"相关度：{item.relevance_score:.2f}")
+        lines.append("")
+
+    lines.append("## 全部条目\n")
+    for idx, item in enumerate(items, 1):
+        lines.append(f"{idx}. [{item.category}] {item.title} — {str(item.url or '')}")
+
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
 def _load_master_doc_id() -> str | None:
     try:
         with open(MASTER_DOC_ID_FILE, "r", encoding="utf-8") as f:
@@ -349,9 +383,11 @@ def main() -> None:
             if args.review:
                 daily_url, master_url = create_knowledge_base_archive(config, ranked, date_str)
             brief = build_daily_brief(top_items, date_str, master_url or "", daily_url or "")
-            print("\n========== 日报预览 ==========\n")
+            preview_path = save_preview_file(items, top_items, date_str)
+            print("\n========== 日报预览（精简版） ==========\n")
             print(brief)
-            print("\n==============================\n")
+            print("\n========================================\n")
+            print(f"完整预览已保存到：{preview_path}")
             logger.info(f"预览完成：共 {len(items)} 条新数据，精选 {len(top_items)} 条")
             return
 
