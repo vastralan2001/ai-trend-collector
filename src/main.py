@@ -12,6 +12,7 @@ from loguru import logger
 
 from src.bots.feishu import FeishuBot
 from src.core.config import Config
+from src.core.llm import enrich_items_with_llm
 from src.core.models import TrendItem
 from src.core.ranker import rank_items, select_top_items
 from src.core.storage import create_storage
@@ -68,6 +69,19 @@ def run_all_spiders(config: Config) -> list[TrendItem]:
     return all_items
 
 
+def _format_item_summary(item: TrendItem) -> str:
+    """格式化单条资讯的摘要/概述/影响，优先展示 LLM 生成的中文内容。"""
+    parts: list[str] = []
+    if item.chinese_summary:
+        parts.append(f"**一句话概述**：{item.chinese_summary}")
+    elif item.summary:
+        summary = item.summary[:500] + "..." if len(item.summary) > 500 else item.summary
+        parts.append(summary)
+    if item.product_impact:
+        parts.append(f"**产品参考与影响**：{item.product_impact}")
+    return "\n\n".join(parts)
+
+
 def build_review_markdown(items: list[TrendItem], title: str = "AI 趋势日报") -> str:
     """生成飞书知识库归档用的完整 markdown 内容"""
     from collections import defaultdict
@@ -86,12 +100,12 @@ def build_review_markdown(items: list[TrendItem], title: str = "AI 趋势日报"
         lines.append(f"## {category}（{len(source_items)} 条）")
         lines.append("")
         for idx, item in enumerate(source_items, 1):
-            summary = item.summary[:500] + "..." if len(item.summary) > 500 else item.summary
             lines.append(f"### {idx}. {item.title}")
             if item.author:
                 lines.append(f"来源：{item.author}")
-            if summary:
-                lines.append(summary)
+            detail = _format_item_summary(item)
+            if detail:
+                lines.append(detail)
             if item.url:
                 lines.append(f"链接：{item.url}")
             lines.append("")
@@ -101,12 +115,12 @@ def build_review_markdown(items: list[TrendItem], title: str = "AI 趋势日报"
         lines.append(f"## {category}（{len(source_items)} 条）")
         lines.append("")
         for idx, item in enumerate(source_items, 1):
-            summary = item.summary[:500] + "..." if len(item.summary) > 500 else item.summary
             lines.append(f"### {idx}. {item.title}")
             if item.author:
                 lines.append(f"来源：{item.author}")
-            if summary:
-                lines.append(summary)
+            detail = _format_item_summary(item)
+            if detail:
+                lines.append(detail)
             if item.url:
                 lines.append(f"链接：{item.url}")
             lines.append("")
@@ -134,8 +148,12 @@ def save_preview_file(items: list[TrendItem], top_items: list[TrendItem], date_s
         lines.append(f"### {idx}. [{item.category}] {item.title}")
         if item.author:
             lines.append(f"来源：{item.author}")
-        if item.summary:
+        if item.chinese_summary:
+            lines.append(f"**一句话概述**：{item.chinese_summary}")
+        elif item.summary:
             lines.append(item.summary)
+        if item.product_impact:
+            lines.append(f"**产品参考与影响**：{item.product_impact}")
         if item.url:
             lines.append(f"链接：{item.url}")
         if item.tags:
@@ -277,6 +295,9 @@ def daily_job(config: Config, limit: int = 5) -> None:
     ranked = rank_items(items)
     top_items = select_top_items(ranked, total=limit, max_per_category=2)
 
+    # 只对精选条目生成中文概述和产品影响，控制 LLM 调用成本
+    top_items = enrich_items_with_llm(top_items, config.get("llm"))
+
     date_str = datetime.utcnow().strftime("%Y-%m-%d")
     daily_url, master_url = create_knowledge_base_archive(config, ranked, date_str)
 
@@ -380,6 +401,10 @@ def main() -> None:
 
         ranked = rank_items(items)
         top_items = select_top_items(ranked, total=args.limit, max_per_category=2)
+
+        # 预览/推送模式下都对精选条目生成中文概述和产品影响
+        top_items = enrich_items_with_llm(top_items, config.get("llm"))
+
         date_str = datetime.utcnow().strftime("%Y-%m-%d")
 
         if args.preview:
