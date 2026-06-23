@@ -46,6 +46,7 @@ data/
 output/
 tmp/
 temp/
+staging/
 
 # Config with secrets (keep example only)
 config/config.yaml
