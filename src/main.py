@@ -114,23 +114,104 @@ def build_review_markdown(items: list[TrendItem], title: str = "AI 趋势日报"
     return "\n".join(lines)
 
 
-def create_knowledge_base_archive(config: Config, items: list[TrendItem], date_str: str = "") -> str | None:
-    """把完整日报写入飞书文档，返回文档链接"""
+MASTER_DOC_ID_FILE = "data/master_doc_id.txt"
+
+
+def _load_master_doc_id() -> str | None:
+    try:
+        with open(MASTER_DOC_ID_FILE, "r", encoding="utf-8") as f:
+            return f.read().strip() or None
+    except FileNotFoundError:
+        return None
+
+
+def _save_master_doc_id(doc_id: str) -> None:
+    Path(MASTER_DOC_ID_FILE).parent.mkdir(parents=True, exist_ok=True)
+    with open(MASTER_DOC_ID_FILE, "w", encoding="utf-8") as f:
+        f.write(doc_id)
+
+
+def get_or_create_master_doc(config: Config, bot: FeishuBot) -> str | None:
+    """获取或创建主索引文档，返回 doc_id"""
+    existing_id = _load_master_doc_id()
+    if existing_id:
+        return existing_id
+
+    if not bot.is_configured():
+        return None
+
+    title = "AI 趋势日报索引"
+    markdown = "# AI 趋势日报索引\n\n每天子文档链接汇总。\n\n"
+    folder_token = config.get("feishu.folder_token", "")
+    doc_url = bot.create_document(title, markdown, folder_token=folder_token)
+    if not doc_url:
+        return None
+
+    doc_id = doc_url.split("/")[-1]
+    _save_master_doc_id(doc_id)
+    logger.info(f"主索引文档已创建：{doc_url}")
+    return doc_id
+
+
+def append_daily_to_master(master_doc_id: str, date_str: str, daily_url: str, bot: FeishuBot) -> bool:
+    """在主索引文档中追加一条今日日报链接"""
+    blocks = [
+        {
+            "block_type": 4,
+            "heading2": {
+                "elements": [{"text_run": {"content": date_str, "text_element_style": {}}}],
+                "style": {"align": 1, "folded": False},
+            },
+        },
+        {
+            "block_type": 2,
+            "text": {
+                "elements": [
+                    {"text_run": {"content": "今日日报：", "text_element_style": {}}},
+                    {
+                        "text_run": {
+                            "content": daily_url,
+                            "text_element_style": {"link": {"url": daily_url}},
+                        }
+                    },
+                ],
+                "style": {"align": 1, "folded": False},
+            },
+        },
+    ]
+    return bot.append_to_document(master_doc_id, blocks)
+
+
+def create_knowledge_base_archive(config: Config, items: list[TrendItem], date_str: str = "") -> tuple[str | None, str | None]:
+    """把完整日报写入飞书文档，并更新主索引。返回 (日报链接, 主索引链接)"""
     if not date_str:
         date_str = datetime.utcnow().strftime("%Y-%m-%d")
 
     bot = FeishuBot(config)
     if not bot.is_configured():
         logger.warning("飞书未配置，跳过知识库归档")
-        return None
+        return None, None
 
+    # 创建当日子文档
     title = f"AI 趋势日报 · {date_str}"
     markdown = build_review_markdown(items, title)
     folder_token = config.get("feishu.folder_token", "")
-    return bot.create_document(title, markdown, folder_token=folder_token)
+    daily_url = bot.create_document(title, markdown, folder_token=folder_token)
+    if not daily_url:
+        return None, None
+
+    # 更新主索引
+    master_doc_id = get_or_create_master_doc(config, bot)
+    if master_doc_id:
+        append_daily_to_master(master_doc_id, date_str, daily_url, bot)
+        master_url = f"https://www.feishu.cn/docx/{master_doc_id}"
+        logger.info(f"主索引已更新：{master_url}")
+        return daily_url, master_url
+
+    return daily_url, None
 
 
-def build_daily_brief(items: list[TrendItem], date_str: str = "", kb_url: str = "") -> str:
+def build_daily_brief(items: list[TrendItem], date_str: str = "", master_url: str = "", daily_url: str = "") -> str:
     """生成群聊用的中文精简日报"""
     from src.core.ranker import format_daily_brief
 
@@ -138,8 +219,10 @@ def build_daily_brief(items: list[TrendItem], date_str: str = "", kb_url: str = 
         date_str = datetime.utcnow().strftime("%Y-%m-%d")
 
     brief = format_daily_brief(items, date_str)
-    if kb_url:
-        brief += f"\n\n完整日报已归档至飞书知识库：[查看]({kb_url})"
+    if master_url:
+        brief += f"\n\n📁 完整日报索引：[查看全部]({master_url})"
+    elif daily_url:
+        brief += f"\n\n📄 完整日报：[查看]({daily_url})"
     return brief
 
 
@@ -155,10 +238,10 @@ def daily_job(config: Config, limit: int = 5) -> None:
     top_items = select_top_items(ranked, total=limit, max_per_category=2)
 
     date_str = datetime.utcnow().strftime("%Y-%m-%d")
-    kb_url = create_knowledge_base_archive(config, ranked, date_str)
+    daily_url, master_url = create_knowledge_base_archive(config, ranked, date_str)
 
     bot = FeishuBot(config)
-    bot.send_daily_brief(top_items, date_str, kb_url)
+    bot.send_daily_brief(top_items, date_str, master_url, daily_url)
     logger.info(f"每日推送完成：{len(top_items)} 条资讯")
 
 
@@ -261,10 +344,11 @@ def main() -> None:
 
         if args.preview:
             # 仅控制台预览
-            kb_url = ""
+            master_url = ""
+            daily_url = ""
             if args.review:
-                kb_url = create_knowledge_base_archive(config, ranked, date_str) or ""
-            brief = build_daily_brief(top_items, date_str, kb_url)
+                daily_url, master_url = create_knowledge_base_archive(config, ranked, date_str)
+            brief = build_daily_brief(top_items, date_str, master_url or "", daily_url or "")
             print("\n========== 日报预览 ==========\n")
             print(brief)
             print("\n==============================\n")
@@ -273,19 +357,20 @@ def main() -> None:
 
         if args.review or args.push:
             # 创建知识库文档
-            kb_url = create_knowledge_base_archive(config, ranked, date_str)
+            daily_url, master_url = create_knowledge_base_archive(config, ranked, date_str)
 
             if args.review:
                 # 只发文档链接
                 bot = FeishuBot(config)
+                link_url = master_url or daily_url
                 bot.send_markdown(
                     f"AI 趋势日报 · {date_str}",
-                    f"📄 今日共抓取 {len(items)} 条趋势数据，已整理成文档：\n\n[点击审阅]({kb_url})",
+                    f"📄 今日共抓取 {len(items)} 条趋势数据，已整理成文档：\n\n[点击审阅]({link_url})",
                 )
             elif args.push:
                 # 发送精简日报到群
                 bot = FeishuBot(config)
-                bot.send_daily_brief(top_items, date_str, kb_url)
+                bot.send_daily_brief(top_items, date_str, master_url or "", daily_url or "")
 
         logger.info(f"所有爬虫共抓取 {len(items)} 条新数据，精选 {len(top_items)} 条")
         return

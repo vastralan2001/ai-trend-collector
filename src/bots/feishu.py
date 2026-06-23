@@ -78,7 +78,7 @@ class BaseFeishuBot(ABC):
             },
         })
 
-    def send_daily_brief(self, items: list[TrendItem], date_str: str = "", kb_url: str = "") -> dict[str, Any]:
+    def send_daily_brief(self, items: list[TrendItem], date_str: str = "", master_url: str = "", daily_url: str = "") -> dict[str, Any]:
         """发送 aihot 风格的中文精简日报"""
         from src.core.ranker import format_daily_brief
 
@@ -89,8 +89,10 @@ class BaseFeishuBot(ABC):
             date_str = datetime.utcnow().strftime("%Y-%m-%d")
 
         brief_md = format_daily_brief(items, date_str)
-        if kb_url:
-            brief_md += f"\n完整日报已归档至飞书知识库：[查看]({kb_url})"
+        if master_url:
+            brief_md += f"\n\n📁 完整日报索引：[查看全部]({master_url})"
+        elif daily_url:
+            brief_md += f"\n\n📄 完整日报：[查看]({daily_url})"
 
         return self.send_markdown(f"AI 趋势早报 · {date_str}", brief_md)
 
@@ -323,37 +325,87 @@ class AppBot(BaseFeishuBot):
             logger.error(f"[AppBot] 创建文件夹异常：{e}")
             return None
 
+    def append_to_document(self, doc_id: str, blocks: list[dict[str, Any]]) -> bool:
+        """向已有文档追加 block"""
+        token = self._get_tenant_access_token()
+        if not token:
+            return False
+
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
+        try:
+            chunk_size = 50
+            for i in range(0, len(blocks), chunk_size):
+                chunk = blocks[i : i + chunk_size]
+                resp = self.session.post(
+                    f"{self.BASE_URL}/docx/v1/documents/{doc_id}/blocks/{doc_id}/children?document_revision_id=-1",
+                    headers=headers,
+                    json={"children": chunk, "document_revision_id": -1},
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                result = resp.json()
+                if result.get("code") != 0:
+                    logger.error(f"[AppBot] 追加文档内容失败：{result}")
+                    return False
+            return True
+        except Exception as e:
+            logger.error(f"[AppBot] 追加文档异常：{e}")
+            return False
+
     @staticmethod
     def _markdown_to_blocks(markdown: str) -> list[dict[str, Any]]:
-        """极简 markdown 转飞书 docx block（使用数字 block_type）"""
+        """极简 markdown 转飞书 docx block（使用数字 block_type），支持 [text](url) 链接"""
+        import re
+
         blocks: list[dict[str, Any]] = []
         for line in markdown.splitlines():
             stripped = line.strip()
             if not stripped:
                 continue
 
-            content = stripped.lstrip("# ").lstrip("## ").lstrip("### ").strip()
-            text_run = {"text_run": {"content": content, "text_element_style": {}}}
+            # 解析行内 markdown 链接 [text](url)
+            elements: list[dict[str, Any]] = []
+            remaining = stripped
+            while remaining:
+                match = re.search(r"\[(.*?)\]\((.*?)\)", remaining)
+                if not match:
+                    if remaining.strip():
+                        elements.append({"text_run": {"content": remaining, "text_element_style": {}}})
+                    break
+
+                pre_text = remaining[:match.start()]
+                if pre_text:
+                    elements.append({"text_run": {"content": pre_text, "text_element_style": {}}})
+
+                link_text = match.group(1)
+                link_url = match.group(2)
+                elements.append({
+                    "text_run": {
+                        "content": link_text,
+                        "text_element_style": {"link": {"url": link_url}},
+                    }
+                })
+                remaining = remaining[match.end():]
 
             if stripped.startswith("# "):
                 blocks.append({
                     "block_type": 3,
-                    "heading1": {"elements": [text_run], "style": {"align": 1, "folded": False}},
+                    "heading1": {"elements": elements, "style": {"align": 1, "folded": False}},
                 })
             elif stripped.startswith("## "):
                 blocks.append({
                     "block_type": 4,
-                    "heading2": {"elements": [text_run], "style": {"align": 1, "folded": False}},
+                    "heading2": {"elements": elements, "style": {"align": 1, "folded": False}},
                 })
             elif stripped.startswith("### "):
                 blocks.append({
                     "block_type": 5,
-                    "heading3": {"elements": [text_run], "style": {"align": 1, "folded": False}},
+                    "heading3": {"elements": elements, "style": {"align": 1, "folded": False}},
                 })
             else:
                 blocks.append({
                     "block_type": 2,
-                    "text": {"elements": [text_run], "style": {"align": 1, "folded": False}},
+                    "text": {"elements": elements, "style": {"align": 1, "folded": False}},
                 })
         return blocks
 
@@ -388,8 +440,8 @@ class FeishuBot:
     def send_trend_items(self, items: list[TrendItem], title: str = "AI 趋势日报") -> dict[str, Any]:
         return self._bot.send_trend_items(items, title)
 
-    def send_daily_brief(self, items: list[TrendItem], date_str: str = "", kb_url: str = "") -> dict[str, Any]:
-        return self._bot.send_daily_brief(items, date_str, kb_url)
+    def send_daily_brief(self, items: list[TrendItem], date_str: str = "", master_url: str = "", daily_url: str = "") -> dict[str, Any]:
+        return self._bot.send_daily_brief(items, date_str, master_url, daily_url)
 
     def create_document(self, title: str, markdown_content: str, folder_token: str = "") -> str | None:
         """创建飞书文档并返回链接，仅 App 模式支持"""
@@ -397,6 +449,13 @@ class FeishuBot:
             return self._bot.create_document(title, markdown_content, folder_token)
         logger.warning("[FeishuBot] 创建文档仅支持 app 模式")
         return None
+
+    def append_to_document(self, doc_id: str, blocks: list[dict[str, Any]]) -> bool:
+        """向已有文档追加 block，仅 App 模式支持"""
+        if isinstance(self._bot, AppBot):
+            return self._bot.append_to_document(doc_id, blocks)
+        logger.warning("[FeishuBot] 追加文档仅支持 app 模式")
+        return False
 
     def create_folder(self, name: str, parent_folder_token: str = "") -> str | None:
         """创建云文档文件夹，仅 App 模式支持"""
