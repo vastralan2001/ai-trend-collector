@@ -175,7 +175,13 @@ def get_or_create_master_doc(config: Config, bot: FeishuBot) -> str | None:
         return None
 
     title = "AI 趋势日报索引"
-    markdown = "# AI 趋势日报索引\n\n每天子文档链接汇总。\n\n"
+    subscribe_url = config.get("feishu.subscribe_url", "")
+    if subscribe_url:
+        subscribe_line = f"\n**👉 [点击订阅每日 AI 趋势早报]({subscribe_url})**\n"
+    else:
+        subscribe_line = "\n**👉 订阅入口：** 请联系管理员添加 `feishu.subscribe_url`\n"
+    markdown = f"# AI 趋势日报索引\n\n每天子文档链接汇总。{subscribe_line}\n"
+
     folder_token = config.get("feishu.folder_token", "")
     doc_url = bot.create_document(title, markdown, folder_token=folder_token)
     if not doc_url:

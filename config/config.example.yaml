@@ -15,6 +15,7 @@ feishu:
   app_secret: ""
   chat_id: ""  # 目标群的 open_chat_id
   folder_token: ""  # 飞书知识库/文件夹 token，日报文档会归档到这里
+  subscribe_url: ""  # 订阅入口链接（如飞书群邀请链接、表单等）
 
 # 存储配置
 storage:

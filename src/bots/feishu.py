@@ -353,8 +353,39 @@ class AppBot(BaseFeishuBot):
             return False
 
     @staticmethod
+    def _parse_inline_markdown(text: str) -> list[dict[str, Any]]:
+        """解析行内 markdown：支持 **bold**、[text](url)"""
+        import re
+
+        elements: list[dict[str, Any]] = []
+        # 先按 **bold** 拆分
+        parts = re.split(r"(\*\*.*?\*\*|\[.*?\]\(.*?\))", text)
+
+        for part in parts:
+            if not part:
+                continue
+            if part.startswith("**") and part.endswith("**"):
+                content = part[2:-2]
+                elements.append({
+                    "text_run": {"content": content, "text_element_style": {"bold": True}},
+                })
+            elif re.match(r"\[.*?\]\(.*?\)", part):
+                match = re.match(r"\[(.*?)\]\((.*?)\)", part)
+                if match:
+                    elements.append({
+                        "text_run": {
+                            "content": match.group(1),
+                            "text_element_style": {"bold": True, "link": {"url": match.group(2)}},
+                        }
+                    })
+            else:
+                elements.append({"text_run": {"content": part, "text_element_style": {}}})
+
+        return elements
+
+    @staticmethod
     def _markdown_to_blocks(markdown: str) -> list[dict[str, Any]]:
-        """极简 markdown 转飞书 docx block（使用数字 block_type），支持 [text](url) 链接"""
+        """极简 markdown 转飞书 docx block（使用数字 block_type），支持 **bold** 和 [text](url)"""
         import re
 
         blocks: list[dict[str, Any]] = []
@@ -363,46 +394,30 @@ class AppBot(BaseFeishuBot):
             if not stripped:
                 continue
 
-            # 解析行内 markdown 链接 [text](url)
-            elements: list[dict[str, Any]] = []
-            remaining = stripped
-            while remaining:
-                match = re.search(r"\[(.*?)\]\((.*?)\)", remaining)
-                if not match:
-                    if remaining.strip():
-                        elements.append({"text_run": {"content": remaining, "text_element_style": {}}})
-                    break
-
-                pre_text = remaining[:match.start()]
-                if pre_text:
-                    elements.append({"text_run": {"content": pre_text, "text_element_style": {}}})
-
-                link_text = match.group(1)
-                link_url = match.group(2)
-                elements.append({
-                    "text_run": {
-                        "content": link_text,
-                        "text_element_style": {"link": {"url": link_url}},
-                    }
-                })
-                remaining = remaining[match.end():]
-
+            # 去掉标题标记后解析行内格式
             if stripped.startswith("# "):
+                content = stripped[2:].strip()
+                elements = AppBot._parse_inline_markdown(content)
                 blocks.append({
                     "block_type": 3,
                     "heading1": {"elements": elements, "style": {"align": 1, "folded": False}},
                 })
             elif stripped.startswith("## "):
+                content = stripped[3:].strip()
+                elements = AppBot._parse_inline_markdown(content)
                 blocks.append({
                     "block_type": 4,
                     "heading2": {"elements": elements, "style": {"align": 1, "folded": False}},
                 })
             elif stripped.startswith("### "):
+                content = stripped[4:].strip()
+                elements = AppBot._parse_inline_markdown(content)
                 blocks.append({
                     "block_type": 5,
                     "heading3": {"elements": elements, "style": {"align": 1, "folded": False}},
                 })
             else:
+                elements = AppBot._parse_inline_markdown(stripped)
                 blocks.append({
                     "block_type": 2,
                     "text": {"elements": elements, "style": {"align": 1, "folded": False}},
