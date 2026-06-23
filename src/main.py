@@ -1,5 +1,7 @@
 import argparse
 import sys
+from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +48,62 @@ def run_spider(name: str, config: Config, **kwargs: Any) -> list[TrendItem]:
     return spider.run(**kwargs)
 
 
-def run_all(config: Config, push_feishu: bool = False) -> list[TrendItem]:
+def group_by_source(items: list[TrendItem]) -> dict[str, list[TrendItem]]:
+    groups: dict[str, list[TrendItem]] = defaultdict(list)
+    for item in items:
+        groups[item.source].append(item)
+    return dict(groups)
+
+
+def build_review_markdown(items: list[TrendItem], title: str = "AI 趋势日报") -> str:
+    """生成飞书文档用的 markdown 内容"""
+    lines = [f"# {title}", f"生成时间：{datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC", ""]
+
+    groups = group_by_source(items)
+    source_labels = {
+        "github_trends": "GitHub 热门仓库",
+        "product_hunt": "Product Hunt 热门产品",
+        "arxiv_ai": "arXiv AI/ML 论文",
+        "huggingface_papers": "Hugging Face 每日论文",
+    }
+
+    for source, source_items in groups.items():
+        label = source_labels.get(source, source)
+        lines.append(f"## {label}（{len(source_items)} 条）")
+        lines.append("")
+        for idx, item in enumerate(source_items, 1):
+            summary = item.summary[:400] + "..." if len(item.summary) > 400 else item.summary
+            lines.append(f"### {idx}. {item.title}")
+            if item.author:
+                lines.append(f"作者/发布者：{item.author}")
+            if summary:
+                lines.append(summary)
+            if item.url:
+                lines.append(f"链接：{item.url}")
+            if item.tags:
+                lines.append(f"标签：{', '.join(item.tags[:8])}")
+            if item.metrics:
+                metrics_str = " | ".join(
+                    f"{k}: {v}" for k, v in item.metrics.items()
+                    if k not in ("raw_data", "categories", "topics") and not isinstance(v, list)
+                )
+                if metrics_str:
+                    lines.append(f"指标：{metrics_str}")
+            lines.append("")
+
+    return "\n".join(lines)
+
+
+def limit_per_source(items: list[TrendItem], limit: int) -> list[TrendItem]:
+    """每个 source 最多保留 limit 条"""
+    groups = group_by_source(items)
+    result: list[TrendItem] = []
+    for source_items in groups.values():
+        result.extend(source_items[:limit])
+    return result
+
+
+def run_all(config: Config, push_feishu: bool = False, review: bool = False, limit: int = 5) -> list[TrendItem]:
     all_items: list[TrendItem] = []
     for name in SPIDER_REGISTRY:
         source_config = config.source_config(name)
@@ -59,9 +116,28 @@ def run_all(config: Config, push_feishu: bool = False) -> list[TrendItem]:
         except Exception as e:
             logger.error(f"运行 {name} 失败：{e}")
 
-    if push_feishu and all_items:
-        bot = FeishuBot(config)
-        bot.send_trend_items(all_items)
+    if not push_feishu or not all_items:
+        return all_items
+
+    bot = FeishuBot(config)
+    if review:
+        # 审阅模式：生成飞书文档，只发文档链接
+        title = f"AI 趋势日报（待审阅） {datetime.utcnow().strftime('%Y-%m-%d')}"
+        markdown = build_review_markdown(all_items, title)
+        doc_url = bot.create_document(title, markdown)
+        if doc_url:
+            bot.send_markdown(
+                title,
+                f"📄 今日共抓取 {len(all_items)} 条趋势数据，已整理成文档：\n\n[点击审阅]({doc_url})\n\n确认后可直接在群里转发，或回复我再发卡片。",
+            )
+        else:
+            logger.warning("创建飞书文档失败，跳过推送")
+    else:
+        # 正常模式：每个源最多发 limit 条卡片
+        display_items = limit_per_source(all_items, limit)
+        bot.send_trend_items(display_items, title=f"AI 趋势日报（各源前 {limit} 条）")
+        if len(display_items) < len(all_items):
+            logger.info(f"群消息已折叠：展示 {len(display_items)}/{len(all_items)} 条")
 
     return all_items
 
@@ -89,6 +165,17 @@ def main() -> None:
         "--push",
         action="store_true",
         help="抓取完成后推送到飞书",
+    )
+    parser.add_argument(
+        "--review",
+        action="store_true",
+        help="审阅模式：生成飞书文档并发送链接，不直接发卡片到群",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=5,
+        help="每个数据源最多展示几条（默认 5，仅普通推送模式生效）",
     )
     parser.add_argument(
         "--list",
@@ -121,10 +208,18 @@ def main() -> None:
     if args.spider:
         items = run_spider(args.spider, config)
         if args.push and items:
-            FeishuBot(config).send_trend_items(items, title=f"{args.spider} 更新")
+            display_items = items[:args.limit] if not args.review else items
+            bot = FeishuBot(config)
+            if args.review:
+                title = f"{args.spider} 更新（待审阅）"
+                doc_url = bot.create_document(title, build_review_markdown(display_items, title))
+                if doc_url:
+                    bot.send_markdown(title, f"[点击审阅]({doc_url})")
+            else:
+                bot.send_trend_items(display_items, title=f"{args.spider} 更新")
         logger.info(f"共抓取 {len(items)} 条新数据")
     elif args.all:
-        items = run_all(config, push_feishu=args.push)
+        items = run_all(config, push_feishu=args.push, review=args.review, limit=args.limit)
         logger.info(f"所有爬虫共抓取 {len(items)} 条新数据")
     else:
         parser.print_help()

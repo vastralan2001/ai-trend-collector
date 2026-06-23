@@ -219,6 +219,95 @@ class AppBot(BaseFeishuBot):
             logger.error(f"[AppBot] 请求异常：{e}")
             return {}
 
+    def create_document(self, title: str, markdown_content: str) -> str | None:
+        """创建飞书文档，返回文档 URL。需要应用开通 docx:document 权限。"""
+        token = self._get_tenant_access_token()
+        if not token:
+            return None
+
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
+
+        # 1. 创建空文档
+        try:
+            resp = self.session.post(
+                f"{self.BASE_URL}/docx/v1/documents",
+                headers=headers,
+                json={"title": title},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("code") != 0:
+                logger.error(f"[AppBot] 创建文档失败：{data}")
+                return None
+            doc_id = data["data"]["document"]["document_id"]
+            logger.info(f"[AppBot] 文档已创建：{doc_id}")
+        except Exception as e:
+            logger.error(f"[AppBot] 创建文档异常：{e}")
+            return None
+
+        # 2. 把 markdown 拆成段落写入文档（写到根 page 下）
+        blocks = self._markdown_to_blocks(markdown_content)
+        try:
+            # 分块写入，避免单请求过大
+            chunk_size = 50
+            for i in range(0, len(blocks), chunk_size):
+                chunk = blocks[i : i + chunk_size]
+                resp = self.session.post(
+                    f"{self.BASE_URL}/docx/v1/documents/{doc_id}/blocks/{doc_id}/children?document_revision_id=-1",
+                    headers=headers,
+                    json={
+                        "children": chunk,
+                        "document_revision_id": -1,
+                    },
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                result = resp.json()
+                if result.get("code") != 0:
+                    logger.error(f"[AppBot] 写入文档内容失败：{result}")
+                    return None
+                logger.debug(f"[AppBot] 已写入 {len(chunk)} 个 block")
+        except Exception as e:
+            logger.error(f"[AppBot] 写入文档异常：{e}")
+            return None
+
+        return f"https://www.feishu.cn/docx/{doc_id}"
+
+    @staticmethod
+    def _markdown_to_blocks(markdown: str) -> list[dict[str, Any]]:
+        """极简 markdown 转飞书 docx block（使用数字 block_type）"""
+        blocks: list[dict[str, Any]] = []
+        for line in markdown.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            content = stripped.lstrip("# ").lstrip("## ").lstrip("### ").strip()
+            text_run = {"text_run": {"content": content, "text_element_style": {}}}
+
+            if stripped.startswith("# "):
+                blocks.append({
+                    "block_type": 3,
+                    "heading1": {"elements": [text_run], "style": {"align": 1, "folded": False}},
+                })
+            elif stripped.startswith("## "):
+                blocks.append({
+                    "block_type": 4,
+                    "heading2": {"elements": [text_run], "style": {"align": 1, "folded": False}},
+                })
+            elif stripped.startswith("### "):
+                blocks.append({
+                    "block_type": 5,
+                    "heading3": {"elements": [text_run], "style": {"align": 1, "folded": False}},
+                })
+            else:
+                blocks.append({
+                    "block_type": 2,
+                    "text": {"elements": [text_run], "style": {"align": 1, "folded": False}},
+                })
+        return blocks
+
 
 class FeishuBot:
     """飞书机器人统一入口，根据配置自动选择 Webhook 或 App 模式"""
@@ -248,3 +337,10 @@ class FeishuBot:
 
     def send_trend_items(self, items: list[TrendItem], title: str = "AI 趋势日报") -> dict[str, Any]:
         return self._bot.send_trend_items(items, title)
+
+    def create_document(self, title: str, markdown_content: str) -> str | None:
+        """创建飞书文档并返回链接，仅 App 模式支持"""
+        if isinstance(self._bot, AppBot):
+            return self._bot.create_document(title, markdown_content)
+        logger.warning("[FeishuBot] 创建文档仅支持 app 模式")
+        return None
