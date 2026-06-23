@@ -1,0 +1,80 @@
+# AI Trend Collector 配置文件
+# 复制为 config/config.yaml 后填写真实值
+
+# 飞书机器人配置
+feishu:
+  webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_WEBHOOK_TOKEN"
+  # 可选：安全设置的密钥
+  secret: ""
+  # 默认推送到的用户/群
+  default_chat_id: ""
+
+# 存储配置
+storage:
+  # 可选: json, sqlite
+  type: json
+  # JSON 模式下的输出目录
+  output_dir: ./data
+  # SQLite 模式下的数据库路径
+  # sqlite_path: ./data/trends.db
+
+# 爬虫全局配置
+crawler:
+  # 默认请求超时（秒）
+  timeout: 30
+  # 默认请求间隔（秒），避免触发反爬
+  delay: 1
+  # 请求重试次数
+  retries: 3
+  # 默认 User-Agent
+  user_agent: "AI-Trend-Collector/0.1.0"
+  # 代理配置（可选）
+  proxy: ""
+
+# 各数据源配置
+sources:
+  github_trends:
+    enabled: true
+    # 语言过滤，空数组表示全部
+    languages:
+      - python
+      - typescript
+      - javascript
+      - go
+      - rust
+      - java
+    # 抓取周期：daily, weekly, monthly
+    period: daily
+    # 最多抓取条数
+    max_items: 30
+
+  product_hunt:
+    enabled: true
+    max_items: 30
+
+  arxiv_ai:
+    enabled: true
+    # 关注的研究领域
+    categories:
+      - cs.AI
+      - cs.CL
+      - cs.CV
+      - cs.LG
+      - cs.IR
+    # 查询关键词
+    keywords:
+      - "large language model"
+      - "agent"
+      - "multimodal"
+    max_items: 30
+
+  huggingface_papers:
+    enabled: true
+    max_items: 30
+
+# 调度配置
+schedule:
+  # 是否启用定时任务
+  enabled: false
+  # 每天早上 9 点执行一次
+  time: "09:00"
