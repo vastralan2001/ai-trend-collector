@@ -14,6 +14,7 @@ feishu:
   app_id: ""
   app_secret: ""
   chat_id: ""  # 目标群的 open_chat_id
+  folder_token: ""  # 飞书知识库/文件夹 token，日报文档会归档到这里
 
 # 存储配置
 storage:
@@ -82,5 +83,5 @@ sources:
 schedule:
   # 是否启用定时任务
   enabled: false
-  # 每天早上 9 点执行一次
-  time: "09:00"
+  # 每天早上 10 点执行一次
+  time: "10:00"

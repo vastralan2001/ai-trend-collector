@@ -27,6 +27,8 @@ class TrendItem(BaseModel):
     author: Optional[str] = Field(default=None, description="作者/发布者")
     tags: list[str] = Field(default_factory=list, description="标签/分类")
     metrics: dict[str, Any] = Field(default_factory=dict, description="相关指标，如 stars, votes, citations")
+    category: str = Field(default="", description="中文分类标签，如 AI产品 / 论文 / 开源项目 / 竞对资讯")
+    relevance_score: float = Field(default=0.0, description="与 Kimi/AIHues 的相关度得分，0-1")
     published_at: Optional[datetime] = Field(default=None, description="发布时间")
     fetched_at: datetime = Field(default_factory=datetime.utcnow, description="抓取时间")
     raw_data: Optional[dict[str, Any]] = Field(default=None, description="原始数据，用于调试")

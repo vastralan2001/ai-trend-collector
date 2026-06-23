@@ -78,6 +78,22 @@ class BaseFeishuBot(ABC):
             },
         })
 
+    def send_daily_brief(self, items: list[TrendItem], date_str: str = "", kb_url: str = "") -> dict[str, Any]:
+        """发送 aihot 风格的中文精简日报"""
+        from src.core.ranker import format_daily_brief
+
+        if not items:
+            return self.send_text("今日暂无新的 AI 趋势数据。")
+
+        if not date_str:
+            date_str = datetime.utcnow().strftime("%Y-%m-%d")
+
+        brief_md = format_daily_brief(items, date_str)
+        if kb_url:
+            brief_md += f"\n完整日报已归档至飞书知识库：[查看]({kb_url})"
+
+        return self.send_markdown(f"AI 趋势早报 · {date_str}", brief_md)
+
     @staticmethod
     def _type_emoji(trend_type: TrendType) -> str:
         mapping = {
@@ -150,10 +166,11 @@ class AppBot(BaseFeishuBot):
 
     BASE_URL = "https://open.feishu.cn/open-apis"
 
-    def __init__(self, app_id: str, app_secret: str, chat_id: str) -> None:
+    def __init__(self, app_id: str, app_secret: str, chat_id: str, folder_token: str = "") -> None:
         self.app_id = app_id
         self.app_secret = app_secret
         self.chat_id = chat_id
+        self.folder_token = folder_token
         self.session = requests.Session()
         self.session.headers["Content-Type"] = "application/json; charset=utf-8"
         self._tenant_access_token: str | None = None
@@ -219,7 +236,7 @@ class AppBot(BaseFeishuBot):
             logger.error(f"[AppBot] 请求异常：{e}")
             return {}
 
-    def create_document(self, title: str, markdown_content: str) -> str | None:
+    def create_document(self, title: str, markdown_content: str, folder_token: str = "") -> str | None:
         """创建飞书文档，返回文档 URL。需要应用开通 docx:document 权限。"""
         token = self._get_tenant_access_token()
         if not token:
@@ -228,11 +245,15 @@ class AppBot(BaseFeishuBot):
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
 
         # 1. 创建空文档
+        create_body: dict[str, Any] = {"title": title}
+        if folder_token:
+            create_body["folder_token"] = folder_token
+
         try:
             resp = self.session.post(
                 f"{self.BASE_URL}/docx/v1/documents",
                 headers=headers,
-                json={"title": title},
+                json=create_body,
                 timeout=30,
             )
             resp.raise_for_status()
@@ -249,7 +270,6 @@ class AppBot(BaseFeishuBot):
         # 2. 把 markdown 拆成段落写入文档（写到根 page 下）
         blocks = self._markdown_to_blocks(markdown_content)
         try:
-            # 分块写入，避免单请求过大
             chunk_size = 50
             for i in range(0, len(blocks), chunk_size):
                 chunk = blocks[i : i + chunk_size]
@@ -273,6 +293,35 @@ class AppBot(BaseFeishuBot):
             return None
 
         return f"https://www.feishu.cn/docx/{doc_id}"
+
+    def create_folder(self, name: str, parent_folder_token: str = "") -> str | None:
+        """创建云文档文件夹，返回 folder_token。需要 drive:drive 权限。"""
+        token = self._get_tenant_access_token()
+        if not token:
+            return None
+
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
+        url = f"{self.BASE_URL}/drive/v1/files"
+        body: dict[str, Any] = {
+            "name": name,
+            "type": "folder",
+        }
+        if parent_folder_token:
+            body["folder_token"] = parent_folder_token
+
+        try:
+            resp = self.session.post(url, headers=headers, json=body, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("code") != 0:
+                logger.error(f"[AppBot] 创建文件夹失败：{data}")
+                return None
+            folder_token = data["data"]["token"]
+            logger.info(f"[AppBot] 文件夹已创建：{folder_token}")
+            return folder_token
+        except Exception as e:
+            logger.error(f"[AppBot] 创建文件夹异常：{e}")
+            return None
 
     @staticmethod
     def _markdown_to_blocks(markdown: str) -> list[dict[str, Any]]:
@@ -319,6 +368,7 @@ class FeishuBot:
                 app_id=config.get("feishu.app_id", ""),
                 app_secret=config.get("feishu.app_secret", ""),
                 chat_id=config.get("feishu.chat_id", ""),
+                folder_token=config.get("feishu.folder_token", ""),
             )
         else:
             self._bot = WebhookBot(
@@ -338,9 +388,19 @@ class FeishuBot:
     def send_trend_items(self, items: list[TrendItem], title: str = "AI 趋势日报") -> dict[str, Any]:
         return self._bot.send_trend_items(items, title)
 
-    def create_document(self, title: str, markdown_content: str) -> str | None:
+    def send_daily_brief(self, items: list[TrendItem], date_str: str = "", kb_url: str = "") -> dict[str, Any]:
+        return self._bot.send_daily_brief(items, date_str, kb_url)
+
+    def create_document(self, title: str, markdown_content: str, folder_token: str = "") -> str | None:
         """创建飞书文档并返回链接，仅 App 模式支持"""
         if isinstance(self._bot, AppBot):
-            return self._bot.create_document(title, markdown_content)
+            return self._bot.create_document(title, markdown_content, folder_token)
         logger.warning("[FeishuBot] 创建文档仅支持 app 模式")
+        return None
+
+    def create_folder(self, name: str, parent_folder_token: str = "") -> str | None:
+        """创建云文档文件夹，仅 App 模式支持"""
+        if isinstance(self._bot, AppBot):
+            return self._bot.create_folder(name, parent_folder_token)
+        logger.warning("[FeishuBot] 创建文件夹仅支持 app 模式")
         return None
