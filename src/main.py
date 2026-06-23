@@ -122,12 +122,12 @@ def run_all(config: Config, push_feishu: bool = False, review: bool = False, lim
     bot = FeishuBot(config)
     if review:
         # 审阅模式：生成飞书文档，只发文档链接
-        title = f"AI 趋势日报（待审阅） {datetime.utcnow().strftime('%Y-%m-%d')}"
-        markdown = build_review_markdown(all_items, title)
-        doc_url = bot.create_document(title, markdown)
+        review_title = "AI 趋势日报 · 待审阅"
+        markdown = build_review_markdown(all_items, review_title)
+        doc_url = bot.create_document(review_title, markdown)
         if doc_url:
             bot.send_markdown(
-                title,
+                review_title,
                 f"📄 今日共抓取 {len(all_items)} 条趋势数据，已整理成文档：\n\n[点击审阅]({doc_url})\n\n确认后可直接在群里转发，或回复我再发卡片。",
             )
         else:
@@ -135,7 +135,7 @@ def run_all(config: Config, push_feishu: bool = False, review: bool = False, lim
     else:
         # 正常模式：每个源最多发 limit 条卡片
         display_items = limit_per_source(all_items, limit)
-        bot.send_trend_items(display_items, title=f"AI 趋势日报（各源前 {limit} 条）")
+        bot.send_trend_items(display_items, title="AI 趋势日报")
         if len(display_items) < len(all_items):
             logger.info(f"群消息已折叠：展示 {len(display_items)}/{len(all_items)} 条")
 
