@@ -2,12 +2,18 @@
 # 复制为 config/config.yaml 后填写真实值
 
 # 飞书机器人配置
+# 模式：webhook（群自定义机器人）或 app（企业自建应用机器人）
 feishu:
+  mode: "webhook"  # webhook | app
+
+  # --- webhook 模式用下面这些 ---
   webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_WEBHOOK_TOKEN"
-  # 可选：安全设置的密钥
-  secret: ""
-  # 默认推送到的用户/群
-  default_chat_id: ""
+  secret: ""  # 可选：安全设置里的签名密钥
+
+  # --- app 模式用下面这些 ---
+  app_id: ""
+  app_secret: ""
+  chat_id: ""  # 目标群的 open_chat_id
 
 # 存储配置
 storage:
