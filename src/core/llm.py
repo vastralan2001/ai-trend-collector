@@ -73,6 +73,68 @@ class LLMClient:
             {"role": "user", "content": content},
         ]
 
+    def _build_title_rewrite_messages(self, item: TrendItem) -> list[dict[str, str]]:
+        type_label = item.type.value if hasattr(item.type, "value") else str(item.type)
+        content = f"""Rewrite the following title into a more engaging, SEO-friendly English title for an AI resources blog.
+
+Rules:
+- Keep it accurate and specific to the actual topic
+- Make it click-worthy by highlighting a clear benefit, curiosity gap, or concrete use case
+- Use strong verbs, specific numbers, or "How to" / "What is" / "Why" when natural
+- Length: 50-90 characters (ideal for search results and card lists)
+- Do NOT use clickbait, all caps, or misleading claims
+- Output ONLY the rewritten title, no quotes, no markdown, no explanation
+
+Original title: {item.title}
+Type: {type_label}
+Summary: {item.summary[:600]}
+"""
+        return [
+            {
+                "role": "system",
+                "content": "You are an expert editor for an AI tools and research blog. You rewrite dry or overly technical titles into compelling, accurate, SEO-friendly English titles that humans want to click.",
+            },
+            {"role": "user", "content": content},
+        ]
+
+    def rewrite_title(self, item: TrendItem) -> str:
+        """用 LLM 改写标题，生成更吸引人的英文标题。未配置或失败时返回原标题。"""
+        if not self.is_configured():
+            return item.title
+
+        messages = self._build_title_rewrite_messages(item)
+        try:
+            response = requests.post(
+                f"{self.base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "messages": messages,
+                    "temperature": max(self.temperature, 0.5),
+                    "max_tokens": 120,
+                },
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+            rewritten = content.strip().strip('"').strip("'").strip()
+            # 去掉可能的 markdown 代码块
+            if rewritten.startswith("```"):
+                rewritten = rewritten.strip("`").strip()
+                if rewritten.lower().startswith("text") or rewritten.lower().startswith("title"):
+                    rewritten = rewritten.split("\n", 1)[-1].strip()
+            if rewritten and len(rewritten) >= 10:
+                logger.debug(f"标题改写成功：{item.title[:30]}... → {rewritten[:60]}")
+                return rewritten
+            logger.warning(f"标题改写结果异常，使用原标题：{content[:100]}")
+        except Exception as e:
+            logger.error(f"标题改写失败（{item.title[:30]}）：{e}")
+        return item.title
+
     @staticmethod
     def _parse_json(content: str) -> dict[str, str] | None:
         """从 LLM 输出中提取 JSON 对象。"""

@@ -33,6 +33,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.core.article_generator import ArticleGenerator
 from src.core.config import Config
 from src.core.models import TrendItem
+from src.core.ranker import rank_items
 from src.core.storage import create_storage
 
 
@@ -69,28 +70,6 @@ def load_trend_items(date_str: str, config: Config) -> list[TrendItem]:
     return result
 
 
-def select_items(items: list[TrendItem], limit: int = 5, max_per_category: int = 2) -> list[TrendItem]:
-    """按相关度排序，尽量保证分类多样性。"""
-    from src.core.ranker import rank_items
-
-    ranked = rank_items(items)
-    selected: list[TrendItem] = []
-    category_counts: dict[str, int] = {}
-    remaining: list[TrendItem] = []
-
-    for item in ranked:
-        cat = item.category or "资讯"
-        if category_counts.get(cat, 0) < max_per_category and len(selected) < limit:
-            selected.append(item)
-            category_counts[cat] = category_counts.get(cat, 0) + 1
-        else:
-            remaining.append(item)
-
-    while len(selected) < limit and remaining:
-        selected.append(remaining.pop(0))
-
-    selected.sort(key=lambda x: x.relevance_score, reverse=True)
-    return selected
 
 
 def load_existing_slugs() -> set[str]:
@@ -167,24 +146,48 @@ def main() -> None:
 
     logger.info(f"Found {len(items)} trend items for {args.date}")
 
-    selected = select_items(items, limit=args.limit)
-    logger.info(f"Selected {len(selected)} items to generate articles")
-
+    ranked = rank_items(items)
     existing_slugs = load_existing_slugs()
-    generator = ArticleGenerator(config.raw.get("article_generation", {}))
+    generator = ArticleGenerator(
+        config=config.raw.get("article_generation", {}),
+        llm_config=config.raw.get("llm"),
+    )
 
     articles: list[dict[str, Any]] = []
     posts_entries: list[dict[str, Any]] = []
+    skipped = 0
+    generated_slugs: set[str] = set()
 
-    for item in selected:
+    # 1. 先按分类多样性初选，每个 tag 最多 2 条
+    diverse_picks: list[TrendItem] = []
+    tag_counts: dict[str, int] = {}
+    remaining: list[TrendItem] = []
+    for item in ranked:
+        tag = item.category or "资讯"
+        if tag_counts.get(tag, 0) < 2 and len(diverse_picks) < args.limit:
+            diverse_picks.append(item)
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+        else:
+            remaining.append(item)
+
+    candidates = diverse_picks + remaining
+
+    # 2. 顺序生成，遇到已存在 slug 自动跳过并继续补位
+    for item in candidates:
+        if len(articles) >= args.limit:
+            break
         article = generator.generate(item, date_str=args.date)
-        if article["slug"] in existing_slugs:
-            logger.warning(f"Skipping {article['slug']}: already exists in AIHues")
+        slug = article["slug"]
+        if slug in existing_slugs or slug in generated_slugs:
+            logger.warning(f"Skipping {slug}: already exists in AIHues")
+            skipped += 1
             continue
         article["html"] = generator.render_html(article)
         articles.append(article)
         posts_entries.append(generator.to_posts_json_entry(article))
-        existing_slugs.add(article["slug"])
+        generated_slugs.add(slug)
+
+    logger.info(f"Generation summary: target={args.limit}, generated={len(articles)}, skipped={skipped}")
 
     if not articles:
         logger.info("No new articles to generate (all slugs already exist)")

@@ -13,6 +13,7 @@ class TrendType(str, Enum):
     RESEARCH_PAPER = "research_paper"
     TECH_NEWS = "tech_news"
     TREND = "trend"
+    GAMES = "games"
 
 
 class TrendItem(BaseModel):

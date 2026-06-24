@@ -18,6 +18,7 @@ from src.core.ranker import rank_items, select_top_items
 from src.core.storage import create_storage
 from src.spiders.arxiv_ai import ArxivAISpider
 from src.spiders.github_trends import GitHubTrendsSpider
+from src.spiders.hacker_news_show import HackerNewsShowSpider
 from src.spiders.huggingface_papers import HuggingfacePapersSpider
 from src.spiders.product_hunt import ProductHuntSpider
 
@@ -27,6 +28,7 @@ SPIDER_REGISTRY: dict[str, type] = {
     "product_hunt": ProductHuntSpider,
     "arxiv_ai": ArxivAISpider,
     "huggingface_papers": HuggingfacePapersSpider,
+    "hacker_news_show": HackerNewsShowSpider,
 }
 
 

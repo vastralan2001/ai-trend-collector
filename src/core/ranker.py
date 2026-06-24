@@ -1,7 +1,6 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+import re
 from typing import Any
-
-from loguru import logger
 
 from src.core.models import TrendItem
 
@@ -11,6 +10,7 @@ SOURCE_CATEGORY = {
     "github_trends": "开源项目",
     "arxiv_ai": "论文",
     "huggingface_papers": "论文",
+    "hacker_news_show": "小游戏",
 }
 
 # Kimi / 月之暗面 相关关键词
@@ -56,6 +56,70 @@ def score_relevance(item: TrendItem) -> float:
     return min(score, 1.0)
 
 
+def _parse_number(value: Any) -> float:
+    """把 metrics 里的字符串数字解析成 float，支持 1.2k / 3.4m 简写。"""
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).lower().replace(",", "").strip()
+    if not text:
+        return 0.0
+    match = re.match(r"^([0-9]+(?:\.[0-9]+)?)\s*([km]?)\s*$", text)
+    if not match:
+        return 0.0
+    num, suffix = match.groups()
+    multiplier = {"k": 1_000, "m": 1_000_000}.get(suffix, 1)
+    return float(num) * multiplier
+
+
+def score_source_heat(item: TrendItem) -> float:
+    """根据来源使用真实热度指标，返回 0-1 的分数。"""
+    metrics = item.metrics or {}
+
+    if item.source == "product_hunt":
+        votes = _parse_number(metrics.get("votes"))
+        comments = _parse_number(metrics.get("comments"))
+        # Product Hunt 热门产品 votes 通常在 100-1000+；封顶 1000 归一化
+        return min(1.0, (votes + comments * 2) / 1000)
+
+    if item.source == "github_trends":
+        today = _parse_number(metrics.get("today_stars"))
+        total = _parse_number(metrics.get("stars"))
+        # GitHub Trending 今日新增 50-500 即为高热；total stars 仅作微弱兜底
+        return min(1.0, today / 300 + min(0.05, total / 100_000))
+
+    if item.source == "hacker_news_show":
+        score = _parse_number(metrics.get("score"))
+        comments = _parse_number(metrics.get("comments"))
+        # HN Show HN 高热 story 分数常在 100-500+
+        return min(1.0, (score + comments * 3) / 500)
+
+    # arXiv / Hugging Face 目前没有外部热度数值，以新鲜度兜底
+    return 0.4
+
+
+def score_content_quality(item: TrendItem) -> float:
+    """评估条目本身的内容完整度。"""
+    score = 1.0
+
+    if not item.url:
+        score -= 0.3
+
+    summary_len = len(item.summary or "")
+    title_len = len(item.title or "")
+    if summary_len < 40:
+        score -= 0.3
+    if title_len < 5:
+        score -= 0.2
+
+    # 有 metrics 且至少包含一个非空指标时略微加分
+    if item.metrics and any(v not in (None, "", 0, 0.0) for v in item.metrics.values()):
+        score += 0.05
+
+    return max(0.0, min(1.0, score))
+
+
 def enrich_item(item: TrendItem) -> TrendItem:
     """补充分类和相关度分数"""
     category = SOURCE_CATEGORY.get(item.source, "资讯")
@@ -81,10 +145,15 @@ def score_recency(item: TrendItem) -> float:
 
 
 def rank_items(items: list[TrendItem]) -> list[TrendItem]:
-    """综合相关度和时效性排序"""
+    """综合来源热度、业务相关性、时效性和内容质量排序"""
     enriched = [enrich_item(item) for item in items]
     for item in enriched:
-        item.relevance_score = score_relevance(item) * 0.7 + score_recency(item) * 0.3
+        item.relevance_score = (
+            score_source_heat(item) * 0.40
+            + score_relevance(item) * 0.35
+            + score_recency(item) * 0.15
+            + score_content_quality(item) * 0.10
+        )
 
     enriched.sort(key=lambda x: x.relevance_score, reverse=True)
     return enriched
