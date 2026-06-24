@@ -329,6 +329,44 @@ def _lcfirst(text: str) -> str:
     return text[0].lower() + text[1:]
 
 
+def _enhance_title(original_title: str, item_type: str, summary: str = "") -> str:
+    """未启用 LLM 时，用类型化模板生成更自然的展示标题。"""
+    title = original_title.strip()
+    if not title:
+        return title
+
+    # 如果原标题已经像完整句子或包含冒号/问号，直接保留
+    if len(title.split()) >= 8 or any(c in title for c in ":?—"):
+        return title
+
+    # 论文标题通常已很完整，只加轻量后缀
+    if item_type == "research_paper":
+        return f"{title}: Key Takeaways"
+
+    if item_type == "games":
+        return f"{title}: Play in Browser"
+
+    if item_type == "open_source":
+        # 对仓库名提取项目名，避免 "owner/repo" 太生硬
+        project = title.split("/")[-1] if "/" in title else title
+        # 首字母大写，- 替换为空格后也大写
+        project = project.replace("-", " ").replace("_", " ").title()
+        templates = [
+            f"{project}: A Practical Guide",
+            f"Getting Started with {project}",
+            f"What Is {project} and Why It Matters",
+        ]
+        return templates[len(project) % len(templates)]
+
+    # ai_product / tech_news / trend / 默认
+    templates = [
+        f"{title}: What It Does and How It Works",
+        f"{title}: A Practical Guide",
+        f"Getting Started with {title}",
+    ]
+    return templates[len(title) % len(templates)]
+
+
 def _filter_capability_tags(tags: list[str]) -> list[str]:
     """过滤掉无意义的标签，返回可作为能力展示的标签。"""
     cleaned: list[str] = []
@@ -382,12 +420,14 @@ class ArticleGenerator:
         host = _extract_host(clean_url)
         first_sentence = _first_sentence(summary)
 
-        # 标题改写：用 LLM 生成更吸引人的标题；失败或未启用则回退到原标题
+        # 标题改写：优先用 LLM；未启用则用类型化模板增强
         display_title = original_title
         if self.rewrite_title_enabled and self._llm_client is not None:
             rewritten = self._llm_client.rewrite_title(item)
             if rewritten and rewritten.strip():
                 display_title = rewritten.strip()
+        else:
+            display_title = _enhance_title(original_title, item_type, summary)
 
         # SEO / 页面标题：按类型选择最合适的后缀
         h1 = display_title

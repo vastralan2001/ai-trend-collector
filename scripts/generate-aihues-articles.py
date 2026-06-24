@@ -126,6 +126,7 @@ def main() -> None:
     parser.add_argument("--date", type=str, default=datetime.utcnow().strftime("%Y-%m-%d"), help="Target date (YYYY-MM-DD)")
     parser.add_argument("--limit", type=int, default=5, help="Number of articles to generate")
     parser.add_argument("--dry-run", action="store_true", help="Write to staging dir instead of AIHues repo")
+    parser.add_argument("--force", action="store_true", help="Overwrite existing AIHues articles instead of skipping")
     parser.add_argument("--config", type=str, default="config/config.yaml", help="Config file path")
     parser.add_argument("--verbose", action="store_true", help="Debug logging")
     args = parser.parse_args()
@@ -156,6 +157,7 @@ def main() -> None:
     articles: list[dict[str, Any]] = []
     posts_entries: list[dict[str, Any]] = []
     skipped = 0
+    overwritten = 0
     generated_slugs: set[str] = set()
 
     # 1. 先按分类多样性初选，每个 tag 最多 2 条
@@ -172,22 +174,29 @@ def main() -> None:
 
     candidates = diverse_picks + remaining
 
-    # 2. 顺序生成，遇到已存在 slug 自动跳过并继续补位
+    # 2. 顺序生成，遇到已存在 slug 根据 --force 决定是否覆盖
     for item in candidates:
         if len(articles) >= args.limit:
             break
         article = generator.generate(item, date_str=args.date)
         slug = article["slug"]
-        if slug in existing_slugs or slug in generated_slugs:
+        if slug in generated_slugs:
+            logger.warning(f"Skipping {slug}: already selected in this run")
+            skipped += 1
+            continue
+        if slug in existing_slugs and not args.force:
             logger.warning(f"Skipping {slug}: already exists in AIHues")
             skipped += 1
             continue
+        if slug in existing_slugs and args.force:
+            logger.warning(f"Overwriting {slug}: --force is set")
+            overwritten += 1
         article["html"] = generator.render_html(article)
         articles.append(article)
         posts_entries.append(generator.to_posts_json_entry(article))
         generated_slugs.add(slug)
 
-    logger.info(f"Generation summary: target={args.limit}, generated={len(articles)}, skipped={skipped}")
+    logger.info(f"Generation summary: target={args.limit}, generated={len(articles)}, skipped={skipped}, overwritten={overwritten}")
 
     if not articles:
         logger.info("No new articles to generate (all slugs already exist)")
