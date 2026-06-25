@@ -329,6 +329,227 @@ def _lcfirst(text: str) -> str:
     return text[0].lower() + text[1:]
 
 
+def _second_sentence(text: str) -> str:
+    """提取文本的第二句，用于丰富段落。"""
+    text = text.strip()
+    if not text:
+        return ""
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    # 过滤太短的句子
+    for s in sentences[1:]:
+        if len(s.strip()) > 20:
+            return s.strip()
+    return ""
+
+
+def _extract_key_phrase(summary: str, title: str) -> str:
+    """从摘要或标题中提取一个关键动作/能力短语。"""
+    text = f"{title}. {summary}"
+    # 简单模式：寻找 "helps you", "lets you", "allows you", "enables" 后面的内容
+    patterns = [
+        r"(?:helps you|lets you|allows you|enables you|makes it easy to)\s+([^\.]+)",
+        r"(?:turns?|transforms?|converts?)\s+([^\.]+)",
+        r"(?:gives?|provides?)\s+([^\.]+?)(?:\s+with|\s+to)",
+        r"(?:for)\s+([^\.]{5,80})",
+    ]
+    for pat in patterns:
+        match = re.search(pat, text, re.IGNORECASE)
+        if match:
+            phrase = match.group(1).strip().rstrip(",")
+            if len(phrase) > 5 and phrase.lower() != title.lower():
+                return phrase
+
+    # 关键词映射兜底
+    summary_lower = summary.lower()
+    title_lower = title.lower()
+    keyword_phrases: dict[str, str] = {
+        "customer": "to manage customer data across tools",
+        "analytics": "to get unified analytics",
+        "data": "to unify scattered data",
+        "agent": "to build agentic workflows",
+        "workflow": "to automate workflows",
+        "testing": "to automate browser tests",
+        "automation": "to automate repetitive tasks",
+        "presentation": "to turn notes into slide decks",
+        "slide": "to create slide decks faster",
+        "photo": "to produce brand photos",
+        "image": "to generate images",
+        "memory": "to give AI agents long-term memory",
+        "cache": "to speed up multimodal inference",
+        "multimodal": "to build multimodal AI apps",
+        "reasoning": "to teach AI to reason visually",
+        "verification": "to detect multimodal misinformation",
+        "puzzle": "to solve logic puzzles",
+        "game": "for quick browser gaming",
+    }
+    for keyword, phrase in keyword_phrases.items():
+        if keyword in summary_lower or keyword in title_lower:
+            return phrase
+
+    # 回退到标题最后部分
+    parts = title.split(":")
+    if len(parts) > 1:
+        return parts[-1].strip()
+    return "automating your workflow"
+
+
+def _generate_hook(title: str, item_type: str, summary: str) -> str:
+    """生成文章开头钩子，避免重复第一句。"""
+    first = _first_sentence(summary)
+    second = _second_sentence(summary)
+    key_phrase = _extract_key_phrase(summary, title)
+
+    if item_type == "research_paper":
+        return f"A recent paper, <em>{title}</em>, explores how {_lcfirst(first.rstrip('.'))}. {second}"
+
+    if item_type == "open_source":
+        project = title.split("/")[-1] if "/" in title else title
+        # 避免第一句和 key_phrase 重复
+        if key_phrase.lower() in first.lower() or first.lower() in key_phrase.lower():
+            return f"<strong>{project}</strong> is an open-source project {key_phrase}. {second}"
+        return f"<strong>{project}</strong> is an open-source project {key_phrase}. {first} {second}"
+
+    if item_type == "games":
+        return f"If you want a quick break without installing anything, <strong>{title}</strong> {_lcfirst(first.rstrip('.'))}. {second}"
+
+    # ai_product / default
+    if key_phrase.lower() in first.lower() or first.lower() in key_phrase.lower():
+        return f"If you're looking for a tool {key_phrase}, <strong>{title}</strong> is worth a look. {second}"
+    return f"If you're looking for a tool {key_phrase}, <strong>{title}</strong> is worth a look. {first} {second}"
+
+
+def _generate_standout(title: str, item_type: str, summary: str, tags: list[str]) -> list[str]:
+    """生成 'What makes it stand out' 要点，尽量结合摘要和标签。"""
+    points: list[str] = []
+
+    # 从标签生成要点，过滤掉无意义标签
+    skip_tags = {
+        "show-hn", "hacker-news", "product-hunt", "github", "arxiv",
+        "trending", "trend", "popular", "new", "today", "typescript",
+        "javascript", "python", "go", "rust", "java",
+        "huggingface", "daily-papers", "paper", "cs.cl", "cs.ai", "cs.cv", "cs.lg",
+    }
+    for tag in tags[:4]:
+        clean = tag.strip().lower()
+        if not clean or clean in skip_tags:
+            continue
+        if "ai" in clean or "ml" in clean:
+            points.append(f"Built around {clean} so it fits modern AI workflows")
+        elif "open-source" in clean or "open source" in clean:
+            points.append("Open-source, so you can self-host or fork it")
+        elif "free" in clean:
+            points.append("Free to use for most personal or small-team scenarios")
+        elif "api" in clean:
+            points.append("Offers an API for integrating into your own apps")
+        elif "browser" in clean or "web" in clean:
+            points.append("Runs in the browser with nothing to install")
+        elif "agent" in clean:
+            points.append(f"Designed for {clean} workflows")
+        elif "automation" in clean or "workflow" in clean:
+            points.append(f"Helps automate {clean} tasks")
+        else:
+            points.append(f"Designed around {clean}")
+
+    # 保底要点
+    if len(points) < 3:
+        if item_type == "research_paper":
+            points.extend([
+                "Addresses a concrete bottleneck rather than an abstract improvement",
+                "Includes reproducible experiments and public benchmarks",
+                "Releases code and traces so others can verify and extend the work",
+            ])
+        elif item_type == "open_source":
+            points.extend([
+                "No vendor lock-in because you control the source code",
+                "Can be integrated into existing DevOps or CI/CD pipelines",
+                "Community contributions keep it moving forward",
+            ])
+        elif item_type == "games":
+            points.extend([
+                "No downloads or sign-ups required",
+                "Built for short, satisfying play sessions",
+                "Shows what a small team can ship on the web",
+            ])
+        else:
+            points.extend([
+                "Aims to reduce manual work through automation",
+                "Works alongside existing SaaS tools rather than replacing everything",
+                "Designed so non-technical users can get started quickly",
+            ])
+
+    return points[:4]
+
+
+def _generate_use_cases(item_type: str, title: str, tags: list[str], summary: str) -> list[str]:
+    """生成更贴合 item 的用例。"""
+    summary_lower = summary.lower()
+    title_lower = title.lower()
+
+    # 关键词到用例的映射
+    keyword_cases: dict[str, list[str]] = {
+        "presentation": ["Turning meeting notes into slide decks", "Drafting pitch decks quickly", "Reusing existing documents as source material"],
+        "slide": ["Building pitch decks from notes", "Creating training materials", "Turning articles into talks"],
+        "photo": ["Producing brand visuals without a full studio", "Batch-editing product photos", "Creating consistent marketing imagery"],
+        "image": ["Generating marketing assets", "Prototyping designs", "Automating repetitive visual edits"],
+        "memory": ["Giving agents long-term recall", "Building knowledge bases from documents", "Connecting facts across conversations"],
+        "customer": ["Unifying customer data across tools", "Building a single source of truth for product teams", "Tracking user behavior without switching apps"],
+        "data": ["Unifying scattered data sources", "Reducing manual data exports", "Feeding cleaner inputs to analytics or AI models"],
+        "analytics": ["Monitoring product metrics in one place", "Replacing spreadsheet-heavy reporting", "Sharing dashboards across teams"],
+        "agent": ["Powering autonomous workflows", "Adding long-term memory to assistants", "Connecting multiple tools in sequence"],
+        "cache": ["Speeding up inference for multimodal models", "Reducing serving costs", "Improving latency in production"],
+        "multimodal": ["Processing vision + language tasks", "Building richer AI interfaces", "Handling mixed input types"],
+        "reasoning": ["Solving math or logic problems", "Improving model reliability", "Training models on verifiable tasks"],
+        "verification": ["Detecting AI-generated misinformation", "Cross-checking claims across sources", "Building safer content pipelines"],
+        "puzzle": ["Short brain breaks during work", "Sharing challenges with friends", "Practicing logic skills"],
+        "game": ["Quick browser breaks", "Competing on leaderboards", "Sharing with friends"],
+        "testing": ["Automating end-to-end browser tests", "Running cross-browser regression suites", "Catching UI bugs before release"],
+        "automation": ["Automating repetitive browser tasks", "Scheduling routine checks", "Connecting tools without writing glue code"],
+        "repo": ["Self-hosting without vendor lock-in", "Customizing behavior through code", "Learning from community contributions"],
+    }
+
+    cases: list[str] = []
+    matched_keywords: list[str] = []
+
+    # 按顺序匹配关键词，优先用第一个匹配到的用例
+    for keyword, candidate_cases in keyword_cases.items():
+        if keyword in summary_lower or keyword in title_lower:
+            matched_keywords.append(keyword)
+            if not cases:
+                cases = list(candidate_cases)
+
+    # 如果第一个关键词用例不足 3 个，再补充其他匹配关键词的用例
+    for keyword in matched_keywords[1:]:
+        if len(cases) >= 3:
+            break
+        for c in keyword_cases[keyword]:
+            if c not in cases:
+                cases.append(c)
+
+    # 从标签补充（不重复）
+    for tag in tags:
+        clean = tag.strip().lower()
+        if clean in matched_keywords or clean in {"show-hn", "hacker-news", "product-hunt", "github", "arxiv", "trending", "trend", "popular", "new", "today"}:
+            continue
+        if clean in keyword_cases:
+            if len(cases) >= 4:
+                break
+            for c in keyword_cases[clean]:
+                if c not in cases:
+                    cases.append(c)
+
+    if len(cases) < 3:
+        if item_type == "research_paper":
+            cases.extend(["Building on top of the published method", "Reproducing results for validation", "Adapting the idea to a related problem"])
+        elif item_type == "open_source":
+            cases.extend(["Self-hosting services", "Customizing behavior through source code", "Integrating into existing pipelines"])
+        elif item_type == "games":
+            cases.extend(["Quick browser breaks", "Sharing with friends", "Trying a new mechanic without installing"])
+        else:
+            cases.extend(["Automating repetitive tasks", "Creating internal tools quickly", "Connecting with existing SaaS stacks"])
+
+    return cases[:4]
+
+
 def _enhance_title(original_title: str, item_type: str, summary: str = "") -> str:
     """未启用 LLM 时，用类型化模板生成更自然的展示标题。"""
     title = original_title.strip()
@@ -413,7 +634,8 @@ class ArticleGenerator:
 
         item_type = _item_type(item)
         tag = _item_tag(item)
-        original_title = item.title
+        original_title = (item.title or "").strip()
+        item.title = original_title  # 确保后续所有逻辑都使用干净的标题
         slug = _slugify(original_title)
         summary = _rich_summary(item)
         clean_url = _strip_utm_params(str(item.url) if item.url else "")
@@ -431,24 +653,29 @@ class ArticleGenerator:
 
         # SEO / 页面标题：按类型选择最合适的后缀
         h1 = display_title
+        hook = _generate_hook(original_title, item_type, summary)
+        standout = _generate_standout(original_title, item_type, summary, item.tags or [])
+        standout_text = " ".join(standout[:2]).lower() if standout else ""
+
         if item_type == "research_paper":
             seo_title = f"{display_title} | AIHues"
             meta = _truncate(
-                f"{first_sentence} This paper explores the idea and its practical implications.",
+                f"{first_sentence} This paper explores the proposed approach and why it matters.",
                 160,
             )
             banner = _truncate(
-                f"{first_sentence} Here is what the research proposes and why it matters.",
+                f"{first_sentence} Here is what the research proposes and why practitioners should care.",
                 300,
             )
         elif item_type == "open_source":
+            project = original_title.split("/")[-1] if "/" in original_title else original_title
             seo_title = f"{display_title}: A Practical Guide | AIHues"
             meta = _truncate(
-                f"{first_sentence} Learn what it does, who it is for, and how to get started.",
+                f"{first_sentence} Learn what {project} does, who it is for, and how to get started.",
                 160,
             )
             banner = _truncate(
-                f"{first_sentence} This guide explains what it does, who it serves, and how to start using it.",
+                f"{first_sentence} This guide covers what it does, why developers use it, and how to start.",
                 300,
             )
         elif item_type == "games":
@@ -458,7 +685,7 @@ class ArticleGenerator:
                 160,
             )
             banner = _truncate(
-                f"{first_sentence} It is ready to play in your browser right now.",
+                f"{first_sentence} It runs in your browser with no install or sign-up.",
                 300,
             )
         else:
@@ -468,7 +695,7 @@ class ArticleGenerator:
                 160,
             )
             banner = _truncate(
-                f"{first_sentence} This guide explains what it does, who it serves, and how to start using it.",
+                f"{first_sentence} This guide covers what it does, who it's best for, and how to try it.",
                 300,
             )
 
@@ -481,6 +708,8 @@ class ArticleGenerator:
             "meta_description": meta,
             "h1": h1,
             "banner": banner,
+            "hook": hook,
+            "standout": standout,
             "date": date_str,
             "read_time": _estimate_read_time(summary),
             "cover_image": _choose_cover_image(tag, seed=display_title, summary=summary, used=self._used_cover_images),
@@ -507,23 +736,27 @@ class ArticleGenerator:
 
         sections: list[str] = []
 
-        # Intro: 不再重复标题，直接用第一句 + 类型化引导语
-        if item_type == "research_paper":
-            sections.append(
-                f"<p>{first_sentence} This paper explores the proposed approach and its implications for AI systems.</p>"
-            )
-        elif item_type == "open_source":
-            sections.append(
-                f"<p>{first_sentence} This guide explains what it does, who it serves, and how to start using it.</p>"
-            )
-        elif item_type == "games":
-            sections.append(
-                f"<p>{first_sentence} It is ready to play in your browser, with no download or sign-up required.</p>"
-            )
+        # Intro: 用钩子开头，避免重复第一句
+        hook = article.get("hook") or ""
+        if hook:
+            sections.append(f"<p>{hook}</p>")
         else:
-            sections.append(
-                f"<p>{first_sentence} This guide explains what it does, who it serves, and how to start using it.</p>"
-            )
+            if item_type == "research_paper":
+                sections.append(
+                    f"<p>{first_sentence} This paper explores the proposed approach and its implications for AI systems.</p>"
+                )
+            elif item_type == "open_source":
+                sections.append(
+                    f"<p>{first_sentence} This guide explains what it does, who it serves, and how to start using it.</p>"
+                )
+            elif item_type == "games":
+                sections.append(
+                    f"<p>{first_sentence} It is ready to play in your browser, with no download or sign-up required.</p>"
+                )
+            else:
+                sections.append(
+                    f"<p>{first_sentence} This guide explains what it does, who it serves, and how to start using it.</p>"
+                )
 
         # CTA 1
         sections.append(self._cta_box_for_tag(tag, primary=True))
@@ -575,18 +808,24 @@ class ArticleGenerator:
                 sections.append(f"<p>{q['a']}</p>")
 
         # Conclusion
+        key_phrase = _extract_key_phrase(summary, item.title)
         sections.append("<h2>Conclusion</h2>")
         if item_type == "research_paper":
             sections.append(
-                f"<p>{item.title} offers a practical angle on {first_sentence.rstrip('.')}. If you are building or optimizing AI systems, it is worth reading the full paper and testing whether the results transfer to your setup.</p>"
+                f"<p>{item.title} offers a practical angle on {_lcfirst(first_sentence.rstrip('.'))}. If you are building or optimizing AI systems, read the full paper and test whether the results transfer to your setup.</p>"
             )
         elif item_type == "games":
             sections.append(
-                f"<p>{first_sentence} It is a nice break from work and a good example of what a small team can ship to the web. Visit <a href=\"{clean_url}\">{host}</a> to play it yourself.</p>"
+                f"<p>{item.title} is a nice break from work and a good example of what a small team can ship to the web. Visit <a href=\"{clean_url}\">{host}</a> to play it yourself.</p>"
+            )
+        elif item_type == "open_source":
+            project = item.title.split("/")[-1] if "/" in item.title else item.title
+            sections.append(
+                f"<p>{project} is worth evaluating if you want {key_phrase} without vendor lock-in. Check out the repository on <a href=\"{clean_url}\">{host}</a> and try a small integration before committing.</p>"
             )
         else:
             sections.append(
-                f"<p>{first_sentence} It works best when you match its strengths to your actual workflow. Visit <a href=\"{clean_url}\">{host}</a> to learn more and try it yourself.</p>"
+                f"<p>{item.title} works best when you need {key_phrase}. Visit <a href=\"{clean_url}\">{host}</a> to explore the features and run a quick test with your own data.</p>"
             )
 
         # CTA 2
@@ -666,21 +905,28 @@ class ArticleGenerator:
         """生成 How It Works / Key Idea / Key Capabilities / Use Cases 等主体段落。"""
         sections: list[str] = []
         first_sentence = _first_sentence(summary)
+        second = _second_sentence(summary)
+        title = item.title
+        capability_tags = _filter_capability_tags(item.tags)
+        standout = _generate_standout(title, item_type, summary, item.tags or [])
+        use_cases = _generate_use_cases(item_type, title, item.tags or [], summary)
 
+        # 1. What it does / Key idea
         if item_type == "research_paper":
             sections.append("<h2>Key Idea</h2>")
             sections.append(f"<p>{first_sentence}</p>")
+            if second:
+                sections.append(f"<p>{second}</p>")
             sections.append("<h3>Why It Matters</h3>")
             sections.append("<ul>")
-            sections.append("<li>It addresses a concrete bottleneck in current AI systems rather than an abstract improvement.</li>")
-            sections.append("<li>It proposes a training-free or lightweight intervention that can plug into existing pipelines.</li>")
-            sections.append("<li>It includes reproducible experiments and benchmarks on public datasets.</li>")
-            sections.append("<li>The released code and traces make it easier to verify and extend.</li>")
+            for point in standout:
+                sections.append(f"<li>{point}</li>")
             sections.append("</ul>")
         elif item_type == "games":
             sections.append("<h2>What It Is</h2>")
-            sections.append(f"<p>{first_sentence} It runs in the browser and is ready to play without downloads or sign-ups.</p>")
-            capability_tags = _filter_capability_tags(item.tags)
+            sections.append(f"<p>{first_sentence}</p>")
+            if second:
+                sections.append(f"<p>{second}</p>")
             if capability_tags:
                 sections.append("<h3>Tags</h3>")
                 sections.append("<ul>")
@@ -689,45 +935,43 @@ class ArticleGenerator:
                 sections.append("</ul>")
             sections.append("<h3>Why Play It</h3>")
             sections.append("<ul>")
-            sections.append("<li>Quick to start — no installation needed</li>")
-            sections.append("<li>Built for short, satisfying sessions</li>")
-            sections.append("<li>Showcases a creative use of web technology</li>")
-            sections.append("<li>Great for a break or a quick challenge</li>")
+            for point in standout:
+                sections.append(f"<li>{point}</li>")
             sections.append("</ul>")
         elif item_type == "open_source":
+            project = title.split("/")[-1] if "/" in title else title
             sections.append("<h2>What It Does</h2>")
-            sections.append(f"<p>{first_sentence} You can self-host it, inspect the source, and adapt it to your own stack.</p>")
-            capability_tags = _filter_capability_tags(item.tags)
-            if capability_tags:
-                sections.append("<h3>Key Capabilities</h3>")
-                sections.append("<ul>")
-                for tag in capability_tags:
-                    sections.append(f"<li>{tag}</li>")
-                sections.append("</ul>")
-            sections.append("<h3>Common Use Cases</h3>")
+            sections.append(f"<p>{first_sentence}</p>")
+            if second:
+                sections.append(f"<p>{second}</p>")
+            sections.append("<h3>Why Developers Use It</h3>")
             sections.append("<ul>")
-            sections.append("<li>Self-hosting services without vendor lock-in</li>")
-            sections.append("<li>Customizing behavior through source code</li>")
-            sections.append("<li>Learning from community contributions</li>")
-            sections.append("<li>Integrating into existing DevOps pipelines</li>")
+            for point in standout:
+                sections.append(f"<li>{point}</li>")
             sections.append("</ul>")
         else:
             sections.append("<h2>How It Works</h2>")
-            sections.append(f"<p>{first_sentence} It turns your input into a useful result, and most users can start without writing code or configuring complex settings.</p>")
-            capability_tags = _filter_capability_tags(item.tags)
+            sections.append(f"<p>{first_sentence}</p>")
+            if second:
+                sections.append(f"<p>{second}</p>")
             if capability_tags:
                 sections.append("<h3>Key Capabilities</h3>")
                 sections.append("<ul>")
                 for tag in capability_tags:
                     sections.append(f"<li>{tag}</li>")
                 sections.append("</ul>")
+
+        # 2. Use cases / practical applications
+        if item_type == "research_paper":
+            sections.append("<h3>Practical Applications</h3>")
+        elif item_type == "games":
+            sections.append("<h3>When to Play</h3>")
+        else:
             sections.append("<h3>Common Use Cases</h3>")
-            sections.append("<ul>")
-            sections.append("<li>Creating internal tools or client portals</li>")
-            sections.append("<li>Automating form-based workflows</li>")
-            sections.append("<li>Generating content or design drafts</li>")
-            sections.append("<li>Connecting with existing SaaS stacks</li>")
-            sections.append("</ul>")
+        sections.append("<ul>")
+        for case in use_cases:
+            sections.append(f"<li>{case}</li>")
+        sections.append("</ul>")
 
         return sections
 
@@ -740,28 +984,32 @@ class ArticleGenerator:
         clean_url: str,
     ) -> list[dict[str, str]]:
         first_sentence = _first_sentence(summary)
+        second = _second_sentence(summary)
+        key_phrase = _extract_key_phrase(summary, item.title)
+        project = item.title.split("/")[-1] if "/" in item.title else item.title
+
         if item_type == "research_paper":
             return [
-                {"q": f"What problem does {item.title} solve?", "a": first_sentence},
-                {"q": f"Who is {item.title} most relevant for?", "a": f"Researchers and engineers working on related AI problems who want a reproducible, training-free angle on {_lcfirst(first_sentence.rstrip('.'))}."},
-                {"q": "Where can I read the full paper?", "a": f"You can find the paper on <a href=\"{clean_url}\">{host}</a>."},
+                {"q": f"What problem does {item.title} address?", "a": f"{first_sentence} {second}"},
+                {"q": f"Who should read {item.title}?", "a": f"Researchers and engineers who care about {key_phrase} and want a reproducible, publicly benchmarked approach."},
+                {"q": "Where can I read the full paper?", "a": f"You can find the paper and any released code on <a href=\"{clean_url}\">{host}</a>."},
             ]
         if item_type == "games":
             return [
-                {"q": f"What is {item.title}?", "a": first_sentence},
-                {"q": f"Do I need to install anything to play {item.title}?", "a": f"No. You can play it directly in your browser at <a href=\"{clean_url}\">{host}</a>."},
-                {"q": f"Is {item.title} free to play?", "a": "Most Show HN browser games are free to play. Check the project page for any premium features or donations."},
+                {"q": f"What is {item.title}?", "a": f"{first_sentence} {second}"},
+                {"q": f"Do I need to install anything to play {item.title}?", "a": f"No. It runs in the browser at <a href=\"{clean_url}\">{host}</a>, so there is nothing to download or sign up for."},
+                {"q": f"Is {item.title} free?", "a": "Most Show HN browser games are free. Check the project page for any optional donations or premium features."},
             ]
         if item_type == "open_source":
             return [
-                {"q": f"What license does {item.title} use?", "a": f"Check the repository on <a href=\"{clean_url}\">{host}</a> for the exact open-source license."},
-                {"q": f"How do I install {item.title}?", "a": f"Installation steps are usually in the README on <a href=\"{clean_url}\">{host}</a>. Most projects support package managers or Docker."},
-                {"q": f"Is {item.title} production-ready?", "a": "Review recent releases, issues, and community activity on the repository to assess maturity."},
+                {"q": f"What does {project} do?", "a": f"{first_sentence} {second}"},
+                {"q": f"How do I install {project}?", "a": f"Start with the README on <a href=\"{clean_url}\">{host}</a>. Most repositories include installation steps for package managers, Docker, or source builds."},
+                {"q": f"Is {project} production-ready?", "a": f"Review the latest releases, issues, and community activity on <a href=\"{clean_url}\">{host}</a> to decide if it matches your maturity requirements."},
             ]
         return [
-            {"q": f"What is {item.title}?", "a": first_sentence},
-            {"q": f"Who is {item.title} best for?", "a": f"It suits teams and individuals looking for {_lcfirst(first_sentence.rstrip('.'))} without building from scratch."},
-            {"q": f"Do I need coding skills to use {item.title}?", "a": f"Most products in this category target non-technical users, but check the official docs on <a href=\"{clean_url}\">{host}</a> for advanced customizations."},
+            {"q": f"What is {item.title}?", "a": f"{first_sentence} {second}"},
+            {"q": f"Who is {item.title} best for?", "a": f"Teams and individuals who want {key_phrase} without building the underlying infrastructure themselves."},
+            {"q": f"How do I get started with {item.title}?", "a": f"Visit <a href=\"{clean_url}\">{host}</a> to sign up or view the docs, then run a small test project that matches your use case."},
         ]
 
     def _cta_box_for_tag(self, tag: str, primary: bool = True) -> str:
