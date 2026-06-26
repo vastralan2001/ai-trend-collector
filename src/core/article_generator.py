@@ -1096,4 +1096,103 @@ class ArticleGenerator:
             "readTime": article["read_time"],
             "coverImage": article["cover_image"],
             "description": article["description"],
+            "source": "auto",
         }
+
+    # AIHues Stories cover-scene generation -----------------------------------
+    # Each auto-generated article also gets a deterministic SVG scene so its
+    # card on /stories matches the format used by hand-authored articles.
+
+    _SCENE_PALETTES: list[dict[str, str]] = [
+        {"sky_hi": "#fdf2e4", "sky_lo": "#f1dcc6", "soft": "#f5e6d3", "accent": "#c2502e"},
+        {"sky_hi": "#eff6ff", "sky_lo": "#dbeafe", "soft": "#dbeafe", "accent": "#2563eb"},
+        {"sky_hi": "#f5f3ff", "sky_lo": "#ede9fe", "soft": "#ede9fe", "accent": "#7c3aed"},
+        {"sky_hi": "#ecfdf5", "sky_lo": "#d1fae5", "soft": "#d1fae5", "accent": "#059669"},
+        {"sky_hi": "#fff7ed", "sky_lo": "#ffedd5", "soft": "#ffedd5", "accent": "#ea580c"},
+        {"sky_hi": "#fefce8", "sky_lo": "#fef9c3", "soft": "#fef9c3", "accent": "#ca8a04"},
+        {"sky_hi": "#fff1f2", "sky_lo": "#ffe4e6", "soft": "#ffe4e6", "accent": "#e11d48"},
+        {"sky_hi": "#ecfeff", "sky_lo": "#cffafe", "soft": "#cffafe", "accent": "#0891b2"},
+        {"sky_hi": "#f0f9ff", "sky_lo": "#e0f2fe", "soft": "#e0f2fe", "accent": "#0284c7"},
+        {"sky_hi": "#f7fee7", "sky_lo": "#ecfccb", "soft": "#ecfccb", "accent": "#65a30d"},
+        {"sky_hi": "#faf5ff", "sky_lo": "#f3e8ff", "soft": "#f3e8ff", "accent": "#9333ea"},
+        {"sky_hi": "#fffbeb", "sky_lo": "#fef3c7", "soft": "#fef3c7", "accent": "#d97706"},
+        {"sky_hi": "#f0fdfa", "sky_lo": "#ccfbf1", "soft": "#ccfbf1", "accent": "#0f766e"},
+        {"sky_hi": "#eef2ff", "sky_lo": "#e0e7ff", "soft": "#e0e7ff", "accent": "#4f46e5"},
+        {"sky_hi": "#fff0f5", "sky_lo": "#ffd6e8", "soft": "#ffd6e8", "accent": "#db2777"},
+        {"sky_hi": "#f5f5f4", "sky_lo": "#e7e5e4", "soft": "#e7e5e4", "accent": "#78716c"},
+    ]
+
+    _SCENE_ICONS: dict[str, list[tuple[str, str]]] = {
+        "AI Tools": [("bot", "bot"), ("sparkles", "sparkles"), ("wand-sparkles", "wand"), ("zap", "zap")],
+        "AI Research": [("microscope", "microscope"), ("atom", "atom"), ("brain", "brain"), ("network", "network")],
+        "Development": [("code-xml", "codeXml"), ("terminal", "terminal"), ("cpu", "cpu"), ("git-branch", "gitBranch")],
+        "Games": [("gamepad-2", "gamepad"), ("puzzle", "puzzle"), ("dice-5", "dice"), ("joystick", "joystick")],
+        "Growth": [("trending-up", "trendingUp"), ("chart-bar", "barChart"), ("target", "target"), ("rocket", "rocket")],
+        "Productivity": [("zap", "zap"), ("square-check", "checkSquare"), ("clock", "clock"), ("sparkles", "sparkles")],
+        "SEO": [("search", "search"), ("globe", "globe"), ("target", "target"), ("chart-bar", "barChart")],
+        "Research": [("sparkles", "sparkles"), ("microscope", "microscope"), ("atom", "atom"), ("brain", "brain")],
+        "Indie Dev": [("rocket", "rocket"), ("code-xml", "codeXml"), ("terminal", "terminal"), ("cpu", "cpu")],
+    }
+
+    @staticmethod
+    def _scene_hash(s: str, idx: int) -> int:
+        return int(hashlib.sha256(f"{s}:{idx}".encode()).hexdigest(), 16)
+
+    def generate_scene_tsx(self, article: dict[str, Any], scene_dir: Path) -> Path | None:
+        """Write a deterministic Stories scene component for the article.
+
+        Returns the written path, or None if a scene already exists.
+        """
+        slug = article["slug"]
+        tag = article["tag"]
+        title = article["title"]
+        scene_path = scene_dir / f"{slug}.tsx"
+        if scene_path.exists():
+            return None
+
+        h = self._scene_hash(slug, 0)
+        palette = self._SCENE_PALETTES[h % len(self._SCENE_PALETTES)]
+        icons = self._SCENE_ICONS.get(tag, self._SCENE_ICONS["Research"])
+        icon_file, icon_var = icons[h % len(icons)]
+        seed = 1000 + (h % 900)
+        tx = 24 + (self._scene_hash(slug, 1) % 152)
+        ty = 14 + (self._scene_hash(slug, 2) % 72)
+        sky = f"['{palette['sky_hi']}', '{palette['sky_lo']}']"
+        soft = palette['soft']
+        accent = palette['accent']
+
+        scene = f"""'use client';
+
+import {{ __iconNode as {icon_var}Node }} from 'lucide-react/dist/esm/icons/{icon_file}.mjs';
+
+import {{ Frame, RoughIcon, Twinkle, INK, motion, loop }} from './_kit';
+
+/* {title}
+   Auto-generated cover scene for this AIHues story. */
+
+export default function Scene() {{
+  return (
+    <Frame sky={{{sky}}}>
+      <circle cx='100' cy='50' r='38' fill='{soft}' opacity='0.24' />
+      <motion.g
+        animate={{{{ scale: [1, 1.05, 1] }}}}
+        transition={{loop(3.0)}}
+        style={{{{ transformOrigin: '100px 52px' }}}}
+      >
+        <RoughIcon
+          node={{{icon_var}Node}}
+          x={{100}}
+          y={{52}}
+          size={{50}}
+          c={{INK}}
+          fill='{accent}'
+          seed={{{seed}}}
+        />
+      </motion.g>
+      <Twinkle x={{{tx}}} y={{{ty}}} r={{0.8}} c='{accent}' d={{0.6}} />
+    </Frame>
+  );
+}}
+"""
+        scene_path.write_text(scene, encoding="utf-8")
+        return scene_path

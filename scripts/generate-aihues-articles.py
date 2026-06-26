@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +41,8 @@ from src.core.storage import create_storage
 AIHUES_REPO = PROJECT_ROOT.parent  # ai-trend-collector is inside AIHues repo
 RESOURCES_DIR = AIHUES_REPO / "apps" / "aihues-web" / "public" / "resources"
 POSTS_JSON = AIHUES_REPO / "apps" / "aihues-web" / "content" / "resources" / "posts.json"
+SCENES_DIR = AIHUES_REPO / "apps" / "aihues-web" / "app" / "components" / "story-scenes"
+REGISTRY_SCRIPT = AIHUES_REPO / "apps" / "aihues-web" / "scripts" / "gen-story-registry.mjs"
 STAGING_DIR = PROJECT_ROOT / "staging" / "aihues-articles"
 
 
@@ -85,9 +88,10 @@ def load_existing_slugs() -> set[str]:
 def write_articles(
     articles: list[dict[str, Any]],
     posts_entries: list[dict[str, Any]],
+    generator: ArticleGenerator,
     dry_run: bool = False,
 ) -> tuple[list[Path], list[dict[str, Any]]]:
-    """写入 HTML 文件并更新 posts.json。"""
+    """写入 HTML 文件、封面 scene、并更新 posts.json。"""
     output_dir = STAGING_DIR / datetime.utcnow().strftime("%Y-%m-%d") if dry_run else RESOURCES_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -118,6 +122,27 @@ def write_articles(
         json.dump(new_posts, f, ensure_ascii=False, indent=2)
 
     logger.info(f"Updated {POSTS_JSON} with {len(posts_entries)} new articles")
+
+    # 生成 Stories 封面 scene 并刷新 registry
+    SCENES_DIR.mkdir(parents=True, exist_ok=True)
+    scene_paths: list[Path] = []
+    for article in articles:
+        scene_path = generator.generate_scene_tsx(article, SCENES_DIR)
+        if scene_path:
+            scene_paths.append(scene_path)
+            logger.info(f"Wrote scene {scene_path}")
+    if scene_paths and REGISTRY_SCRIPT.exists():
+        result = subprocess.run(
+            ["node", str(REGISTRY_SCRIPT)],
+            cwd=AIHUES_REPO / "apps" / "aihues-web",
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            logger.info("Regenerated story-scenes registry")
+        else:
+            logger.warning(f"Registry regeneration failed: {result.stderr}")
+
     return written_paths, new_posts
 
 
@@ -202,7 +227,7 @@ def main() -> None:
         logger.info("No new articles to generate (all slugs already exist)")
         sys.exit(0)
 
-    written_paths, _ = write_articles(articles, posts_entries, dry_run=args.dry_run)
+    written_paths, _ = write_articles(articles, posts_entries, generator, dry_run=args.dry_run)
 
     print("\n========== Generated Articles ==========\n")
     for idx, article in enumerate(articles, 1):
